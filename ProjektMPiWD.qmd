@@ -1,0 +1,1206 @@
+---
+title: 'Projekt zaliczeniowy z Metod Pozyskiwania i Wizualizacji Danych '
+author: "Maja Darczuk"
+format: 
+  html:
+   template-partials: 
+      - title-block.html
+   toc: true 
+   toc-title: "Spis treści"
+   toc-location: left 
+   number-sections: false
+title-block-banner: true
+editor: visual
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(warning=F, message = F, echo = F)
+```
+
+```{r, echo=FALSE}
+library(tidyverse) #cleaning
+library(esquisse)
+library(knitr)
+library(dplyr)
+library(ggcorrplot)
+library(ggridges)
+library(vcd)
+
+library(purrr) #cleaning
+library(repurrrsive)
+
+library(datarium)
+library(ggeasy)
+library(rio) #wczytywanie plików
+library(rvest) #scrappowanie
+library(factoextra) #clustrowanie
+library(gapminder)
+library(sf)
+library(scales)
+library(mice)
+library(htmltools)
+library(networkD3)
+library(stringr)
+library(httr)
+library(leaflet)
+library(rnaturalearth)
+library(gganimate)
+library(maps)
+library(plotly)
+library(gifski)
+library(sf)
+library(ggiraph)
+library(patchwork)
+library(hrbrthemes)
+library(RColorBrewer)
+library(viridis)
+library(shiny)
+library(paletteer)
+library(ggimage)
+library(gridExtra)
+library(dendextend)
+library(DT)
+library(glue)
+library(MetBrewer)
+library(heatmaply)
+library(GGally)
+```
+
+```{r}
+Toyota <- import("Toyota.csv")
+Volkswagen <- import("Volkswagen.csv")
+Audi <- import("Audi.csv")
+Opel <- import("Opel.csv")
+Ford <- import("Ford.csv")
+WszystkieMarki <- import("WszystkieMarki.csv")
+
+TopMarki <- import("Top10MarkiWPolsce.csv")
+
+WszystkieMarki_bezNAwSpalaniu <- WszystkieMarki %>%
+  filter(!is.na(SrednieSpalanieZuzycie))
+```
+
+# Temat analizy
+
+Jakie zależności występują między danymi technicznymi w analizowanych markach samochodów w Polsce w latach 2021-2023. Jakie cechy charakterystyczne posiadają dane marki. Jaką markę warto wybrać pod wględem własnych preferencji.
+
+## Wybór marek aut
+
+Wybrane zostało 10 najpopularniejszych marek aut w Polsce w latach 2021-2023 według danych z [Serwisu Rzeczpospolitej Polskiej](#0).
+
+```{r}
+TopMarki$KrajPochodzenia<- c(
+    VOLKSWAGEN = "Niemcy", 
+    TOYOTA = "Japonia", 
+    FORD = "USA", 
+    AUDI = "Niemcy", 
+    OPEL = "Niemcy", 
+    BMW = "Niemcy", 
+    SKODA = "Czechy", 
+    RENAULT = "Francja", 
+    KIA = "Korea Południowa", 
+    HYUNDAI = "Korea Południowa"
+  )
+
+# Zamiana nazw krajów na angielskie
+TopMarki <- TopMarki %>%
+  mutate(KrajPochodzenia = recode(KrajPochodzenia,
+    "Niemcy" = "Germany",
+    "Japonia" = "Japan",
+    "USA" = "United States of America",
+    "Czechy" = "Czechia",
+    "Francja" = "France",
+    "Korea Południowa" = "South Korea"
+  ))
+```
+
+```{r}
+car_data <- TopMarki
+
+car_data$ImageURL<- c(
+    VOLKSWAGEN = "LogoMarki/Volkswagen.png", 
+    TOYOTA = "LogoMarki/Toyota.png", 
+    FORD = "LogoMarki/Ford.png", 
+    AUDI = "LogoMarki/Audi.png", 
+    OPEL = "LogoMarki/Opel.png", 
+    BMW = "LogoMarki/BMW.png", 
+    SKODA = "LogoMarki/Skoda.png", 
+    RENAULT = "LogoMarki/Renault.png", 
+    KIA = "LogoMarki/Kia.png", 
+    HYUNDAI = "LogoMarki/Hyundai.png"
+  )
+
+
+# Wykres z posortowanymi słupkami malejąco
+wykresMarki1 <- ggplot(car_data, aes(x = reorder(Marka, Liczba), y = Liczba, fill = Marka, text = paste("Marka: ", Marka, "<br>Liczba: ", Liczba, "<br>Kraj Pochodzenia: ", KrajPochodzenia))) +
+  geom_bar(stat = "identity") +
+  geom_image(aes(image = ImageURL), size = 0.1) + 
+  coord_flip() +  
+  scale_y_continuous(labels = comma_format()) +
+  scale_fill_manual(values = c("#7C4B73FF", "#7C4B73FF","#E78429FF", "#AB3329FF","#AB3329FF","#7C4B73FF","#381A61FF","#88A0DCFF",  "#ED968CFF", "#7C4B73FF" ))+
+  labs(
+    x = "Marka",  
+    y = "Liczba", 
+    title = "Liczba samochodów osobowych w Polsce (2021-2023)"  
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "none"
+)
+
+wykresMarki1
+```
+
+Można zaoberwować znaczną przewagę ilości pojazdów marki Volkswagena i Toyoty. Nieco mniejsze wyniki odnotowały marki Ford, Audi i Opel. Na potrzeby dalszej analizy wybrałam 5 najpopularniejszych marek samochodów w poslce.
+
+```{r}
+# Załadowanie mapy świata
+world_sf <- read_sf("https://raw.githubusercontent.com/holtzy/R-graph-gallery/master/DATA/world.geojson")
+world_sf <- world_sf %>% filter(!name %in% c("Antarctica", "Greenland"))
+
+# Połączone dane o samochodach z mapą świata
+world_sf <- world_sf %>%
+  left_join(car_data, by = c("name" = "KrajPochodzenia"))
+
+
+world_sf <- world_sf %>%
+  arrange(desc(Liczba))
+
+p2 <- ggplot(world_sf, aes(
+  x = reorder(name, Liczba),  
+  y = Liczba,
+  tooltip = name,
+  data_id = name,
+  fill = name
+)) +
+  geom_col_interactive(data = filter(world_sf, !is.na(Liczba))) +
+  coord_flip() +
+  scale_y_continuous(labels = scales::comma_format()) +
+  scale_fill_paletteer_d("MetBrewer::Archambault")+
+  theme_minimal() +
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    legend.position = "none"
+  )
+
+p3 <- ggplot() +
+  geom_sf(data = world_sf, fill = "lightgrey", color = "lightgrey") +
+  geom_sf_interactive(
+    data = filter(world_sf, !is.na(Liczba)),
+    aes(fill = name, tooltip = name, data_id = name)
+  ) +
+  coord_sf(
+    crs = st_crs(3857),
+    expand = TRUE  
+  ) +
+  scale_fill_paletteer_d("MetBrewer::Archambault")+
+  theme_void() +
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    legend.position = "none"
+  )
+
+combined_plot <- p2 / p3 + plot_layout(heights = c(1, 2))
+
+interactive_plot <- girafe(ggobj = combined_plot)
+interactive_plot <- girafe_options(
+  interactive_plot,
+  opts_hover(css = "fill:red;stroke:black;")
+)
+
+
+save_html(interactive_plot, "wykresmapa.html")
+includeHTML("wykresmapa.html")
+```
+
+## Zescrapowany zbiór danych
+
+Tabela `WszystkieMarki` to zbiór zawierający dane techniczne 5 najpopularniejszych marek samochodów w Polsce w latach 2021-2023 zescrapowanych ze strony [Auto Centrum](#0) zawierający 7064 obserwacji i 13 zmiennych. Oto szczegóły dotyczące poszczególnych kolumn:
+
+-   **Marka** \<chr\>: Marki samochodu. Wartości: `"Volkswagen", "Toyota", "Ford", "Audi", "Opel"`.
+
+-   **Model** \<chr\>: Modele samochodów danych marek.
+
+-   **Generacja** \<chr\>: Generacje samochodów danych marek. W przypadku braku informacji wartość jest pusta.
+
+-   **Wersja** \<chr\>: Wersje samochodów danych marek. W przypadku braku informacji wartość jest pusta.
+
+-   **PojemnoscSilnika** \<num\>: Pojemność silnika w litrach. Wartości `od 0.8 do 7.5 i NA`.
+
+-   **MocSilnika** \<int\>: Moc silnika w koniach mechanicznych (KM). Wartości `od 25 do 925`.
+
+-   **TypSilnika** \<chr\>: Typ silnika. Wartości: `"benzynowy", "diesel", "hybrydowy plug-in", "hybrydowy", "elektryczny", "benzynowy z lpg"`.
+
+-   **SrednieSpalanieZuzycie** \<num\>: Średnie spalanie w litrach na 100 km lub średnie zużycie energii w kilowatogodzinach na 100km w [cyklu mieszanym]{.underline}. Wartości `od 0.4 do 28.4 i NA`.
+
+-   **Silnik** \<chr\>: Szczegółowe nazwy silnika.
+
+-   **RodzajSkrzyni** \<chr\>: Preferowany rodzaj skrzyni biegów. Wartości: `"manualna", "automatyczna", "bezstopniowa", "zautomatyzowana" i NA`.
+
+-   **RodzajNapedu** \<chr\>: Rodzaj napędu. Wartości: `"na przednią oś", "na tylną oś", "4x4" i NA`.
+
+-   **RokRozpoczeciaProdukcji** \<int\>: Rok rozpoczęcia produkcji samochodu. Wartości `od 1938 do 2024`.
+
+-   **RokZakonczeniaProdukcji** \<int\>: Rok zakończenia produkcji samochodu. Wartości `od 1940 do 2025`.
+
+## Historia pochodzenia
+
+### Volkswagen
+
+#### Ferdinand Porsche
+
+![](images/clipboard-361512661.png){width="183"}
+
+W 1931 roku **Ferdinand Porsche** założył zakłady „Dr. Ing. h. c. F. Porsche GmbH” i na zlecenie firmy Zündapp stworzył prototyp taniego samochodu Type 12. Współpraca z NSU doprowadziła do powstania prototypu Type 32. W 1934 roku, **na polecenie Adolfa Hitlera**, Porsche zaprojektował Volkswagena **Garbusa – tani, rodzinny samochód** mający odciążyć kolej. Nazwa „**Volkswagen**” oznacza „**samochód ludowy**” i odzwierciedlała ideę dostępnego auta dla przeciętnego obywatela. Produkcja seryjna ruszyła w 1938 roku. Po II wojnie światowej Garbus stał się symbolem sukcesu marki, choć bez dalszego udziału Porsche.
+
+### Toyota
+
+#### Kiichirō Toyoda
+
+![](images/clipboard-200023074.png){width="190"}
+
+W 1929 roku **Kiichirō Toyoda odwiedził** **Stany Zjednoczone i Europe**, aby zapoznać się z produkcją samochodów. W 1931 roku opracował prototyp silnika spalinowego, a w 1933 roku uruchomił dział samochodowy, produkując pierwszy model Toyota A1 w 1935 roku. W 1936 roku firma przyjęła nazwę **Toyota**, a rok później powstała **Toyota Motor Company**, która skoncentrowała się na produkcji aut.
+
+Obecnie **Toyota Motor Corporation** jest **największym producentem samochodów na świecie**, sprzedając ponad 10 mln pojazdów rocznie. Marka, wyceniana na 42 mld dolarów, prowadziła w rankingu Japan's Best Global Brands 2015. Toyota jako pierwsza wprowadziła **hybrydy spalinowo-elektryczne** do masowej sprzedaży. **Toyota Central Europe** obsługuje rynek polski, gdzie firma od lat zajmuje czołowe miejsca w rankingu sprzedaży.
+
+### Ford
+
+#### Henry Ford
+
+![](images/clipboard-2719380090.png){width="196"}
+
+**Henry Ford**, amerykański przemysłowiec i inżynier, założył **Ford Motor Company**. W 1896 roku skonstruował pierwszy prototyp samochodu, a w 1899 współtworzył **Detroit Automobile Company**, później przekształcone w **Cadillac Motor Company**. Po konflikcie ze wspólnikami sprzedał udziały. Ford opowiadał się za **masową produkcją tanich aut**.
+
+Ford Motor Company powstała 16 czerwca 1903 roku w Detroit dzięki inwestycji 28 000 dolarów od 12 inwestorów, w tym **braci Dodge**. Firma stała się jednym z największych producentów samochodów, zajmując **drugie miejsce w USA i piąte na świecie**. Początkowo prezesem spółki nie został Henry Ford, aby zapewnić inwestorom stabilność.
+
+### Audi
+
+#### August Horch
+
+![](images/clipboard-3112331321.png){width="157"}
+
+Niemiecki inżynier budowy maszyn i założyciel przedsiębiorstw samochodowych **Horch i Audi**. 16 lipca 1909 założył **August-Horch Automobilwerke GmbH** w Zwickau, które po sporze prawnym ze starym August-Horch-Motorwagen AG już w 1910 r. przemianował na podstawie łacińskiej formy jego nazwiska w **Audi Automobilwerke GmbH**.
+
+Niemiecki producent samochodów osobowych z siedzibą w Ingolstadt w Niemczech, należący do koncernu **Volkswagen AG**. Założony został w 1909 roku przez Augusta Horcha, który założył nową spółkę po tym, jak odszedł z zarządu August-Horch-Motorwagen AG, którą założył w 1899 roku^\[2\]^. Nazwa przedsiębiorstwa wywodzi się z gry słów: **Audi to łacińskie tłumaczenie nazwiska Horch (oznacza „słuchaj!”).**
+
+### Opel
+
+#### Adam Opel
+
+![](images/clipboard-2832567525.png){width="175"}
+
+**Adam Opel**, niemiecki przemysłowiec, założył w 1862 roku fabrykę maszyn do szycia, która od 1866 roku produkowała także rowery. Po jego śmierci w 1895 roku przedsiębiorstwo przejęła jego żona z pięcioma synami, którzy dostrzegli potencjał rozwijającego się **przemysłu samochodowego.**
+
+W 1899 roku podpisano umowę z Friedrichem Lutzmannem, co pozwoliło rozpocząć produkcję pierwszego samochodu marki Opel – **Opel System Lutzmann**, wyposażonego w silnik o mocy 4 KM i osiągającego prędkość maksymalną 20 km/h. Wyprodukowano łącznie 11 egzemplarzy tego modelu. Po dołączeniu do spółki **General Motors** frima zmieniłą nazwe na **Opel Automobile GmbH**.
+
+## Analiza korelacji zmiennych
+
+```{r}
+dane <- WszystkieMarki[, c("MocSilnika","RodzajNapedu","RodzajSkrzyni","SrednieSpalanieZuzycie", "PojemnoscSilnika", "TypSilnika")] 
+
+# Zmień zmienne kategoryczne
+dane$RodzajNapedu <- as.factor(dane$RodzajNapedu)
+dane$RodzajNapedu <- as.numeric(dane$RodzajNapedu)
+
+dane$RodzajSkrzyni <- as.factor(dane$RodzajSkrzyni)
+dane$RodzajSkrzyni <- as.numeric(dane$RodzajSkrzyni)
+
+dane$TypSilnika <- as.factor(dane$TypSilnika)
+dane$TypSilnika <- as.numeric(dane$TypSilnika)
+
+ggpairsplot <- ggpairs(dane, 
+        aes(colour = as.factor(dane$TypSilnika)), 
+        upper = list(continuous = "cor"),  
+        lower = list(continuous = "points") 
+)+
+  scale_color_manual(values = MetBrewer::met.brewer("Archambault"))+
+  scale_fill_manual(values = MetBrewer::met.brewer("Archambault"))
+
+
+ggsave("ggpairsplot.png", plot = ggpairsplot, width = 15, height = 15, dpi = 300)
+```
+
+![](images/clipboard-2568039940.png){width="1500"}
+
+#### Moc silnika
+
+-   Silna dodatnia korelacja z `PojemnoscSilnika` (Corr: 0.681\*\*\*), co potwierdza związek pomiędzy mocą a pojemnością silnika – większe pojemności generują większą moc.
+
+-   Umiarkowana dodatnia korelacja z `SrednieSpalanieZużycie` (Corr: 0.435\*\*\*), co sugeruje, że mocniejsze silniki zazwyczaj zużywają więcej paliwa.
+
+-   Ujemna korelacja z `RodzajNapędu` i `RodzajSkrzyni`, co może wskazywać, że określone napędy i skrzynie biegów są preferowane w pojazdach o mniejszej mocy.
+
+#### Rodzaj napędu
+
+-   Ujemna korelacja z `MocSilnika` (-0.348\*\*\*), co może oznaczać, że napędy różnią się pod względem preferowanego zakresu mocy.
+
+-   Słabe korelacje z `SrednieSpalanieZużycie` (-0.218\*\*\*) i `PojemnoscSilnika`, sugerując, że wpływ rodzaju napędu na te cechy jest mniej istotny.
+
+#### Rodzaj skrzyni
+
+-   Najwyższa korelacja z `RodzajNapędu` (0.440\*\*\*), co sugeruje, że pewne rodzaje skrzyń biegów są typowe dla określonych rodzajów napędów.
+
+-   Ujemna korelacja z `MocSilnika` (-0.502\*\*\*), co może wskazywać, że niektóre skrzynie biegów są bardziej popularne w pojazdach o niższej mocy.
+
+#### Średnie spalanie zużycie
+
+-   Umiarkowana dodatnia korelacja z `MocSilnika` (0.435\*\*\*) i `PojemnoscSilnika` (0.535\*\*\*), co potwierdza, że mocniejsze i większe silniki zużywają więcej paliwa.
+
+-   Niska korelacja z pozostałymi zmiennymi, co sugeruje, że inne czynniki (poza mocą i pojemnością silnika) mają mniejsze znaczenie.
+
+#### Pojemność silnika
+
+-   Najsilniejsza korelacja z `MocSilnika` (0.681\*\*\*), co jest intuicyjne, gdyż pojemność silnika jest bezpośrednio związana z jego mocą.
+
+-   Umiarkowana korelacja z `SrednieSpalanieZużycie` (0.535\*\*\*), co sugeruje, że większe pojemności silnika prowadzą do wyższego zużycia paliwa.
+
+#### Typ silnika
+
+-   Brak silnych korelacji z innymi zmiennymi, co może oznaczać, że rodzaj silnika jest mniej powiązany z cechami ilościowymi takimi jak moc czy spalanie.
+
+#### Wnioski
+
+Zatem w dalszej części analizy zbadamy zależności pomiędzy najbardziej skorelowanymi danymi tzn. `Pojemność Silnika~Moc Silnika~Średnie Spalanie` oraz `Rodzaj Napędu~Rodzaj Skrzyni`. Typ silnika oraz Marka pozwolą nam na podzielenie danych na poszcególne kategorię.
+
+## Spalanie a typ silnika
+
+::: {.panel-tabset .nav-pills}
+### Volkswagen
+
+```{r}
+Volkswagen_bezNAwSpalaniu <- Volkswagen %>%
+  filter(!is.na(SrednieSpalanieZuzycie))
+
+counts <- Volkswagen_bezNAwSpalaniu %>%
+  group_by(TypSilnika) %>%
+  summarise(N = n())
+
+Volkswagen_bezNAwSpalaniu$SrednieSpalanie <- Volkswagen_bezNAwSpalaniu$SrednieSpalanieZuzycie  
+
+Volkswagen_bezNAwSpalaniu$SrednieSpalanie[Volkswagen_bezNAwSpalaniu$TypSilnika == "elektryczny"] <- 
+  Volkswagen_bezNAwSpalaniu$SrednieSpalanieZuzycie[Volkswagen_bezNAwSpalaniu$TypSilnika == "elektryczny"] / 8.9 * 1.69 
+
+
+# Plot z liczbą obserwacji
+ggplot(Volkswagen_bezNAwSpalaniu, aes(x = TypSilnika, y = SrednieSpalanie, fill = TypSilnika)) +
+  geom_violin(width = 1.4) +
+  geom_boxplot(width = 0.1, color = "black", alpha = 0.2) +
+  geom_text(data = counts, aes(x = TypSilnika, y = max(Volkswagen_bezNAwSpalaniu$SrednieSpalanie) + 0.5, label = paste0("n = ", N)), inherit.aes = FALSE) +
+  scale_fill_manual(values = MetBrewer::met.brewer("Archambault")) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(size = 11)
+  ) +
+  ggtitle("Zależność między średnim spalaniem a typem silnika") +
+  xlab("") +
+  ylab("Średnie spalanie")
+
+```
+
+### Toyota
+
+```{r}
+Toyota_bezNAwSpalaniu <- Toyota %>%
+  filter(!is.na(SrednieSpalanieZuzycie))
+
+counts <- Toyota_bezNAwSpalaniu %>%
+  group_by(TypSilnika) %>%
+  summarise(N = n())
+
+Toyota_bezNAwSpalaniu$SrednieSpalanie <- Toyota_bezNAwSpalaniu$SrednieSpalanieZuzycie  
+
+Toyota_bezNAwSpalaniu$SrednieSpalanie[Toyota_bezNAwSpalaniu$TypSilnika == "elektryczny"] <- 
+  Toyota_bezNAwSpalaniu$SrednieSpalanieZuzycie[Toyota_bezNAwSpalaniu$TypSilnika == "elektryczny"] / 8.9 * 1.69 
+
+# Plot z liczbą obserwacji
+ggplot(Toyota_bezNAwSpalaniu, aes(x = TypSilnika, y = SrednieSpalanie, fill = TypSilnika)) +
+  geom_violin(width = 1.4) +
+  geom_boxplot(width = 0.1, color = "black", alpha = 0.2) +
+  geom_text(data = counts, aes(x = TypSilnika, y = max(Toyota_bezNAwSpalaniu$SrednieSpalanie) + 0.5, label = paste0("n = ", N)), inherit.aes = FALSE) +
+  scale_fill_manual(values = MetBrewer::met.brewer("Archambault")) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(size = 11)
+  ) +
+  ggtitle("Zależność między średnim spalaniem a typem silnika") +
+  xlab("") +
+  ylab("Średnie spalanie")
+```
+
+### Ford
+
+```{r}
+Ford_bezNAwSpalaniu <- Ford %>%
+  filter(!is.na(SrednieSpalanieZuzycie))
+
+counts <- Ford_bezNAwSpalaniu %>%
+  group_by(TypSilnika) %>%
+  summarise(N = n())
+
+Ford_bezNAwSpalaniu$SrednieSpalanie <- Ford_bezNAwSpalaniu$SrednieSpalanieZuzycie  
+
+Ford_bezNAwSpalaniu$SrednieSpalanie[Ford_bezNAwSpalaniu$TypSilnika == "elektryczny"] <- 
+  Ford_bezNAwSpalaniu$SrednieSpalanieZuzycie[Ford_bezNAwSpalaniu$TypSilnika == "elektryczny"] / 8.9 * 1.69 
+
+# Plot z liczbą obserwacji
+ggplot(Ford_bezNAwSpalaniu, aes(x = TypSilnika, y = SrednieSpalanie, fill = TypSilnika)) +
+  geom_violin(width = 1.4) +
+  geom_boxplot(width = 0.1, color = "black", alpha = 0.2) +
+  geom_text(data = counts, aes(x = TypSilnika, y = max(Ford_bezNAwSpalaniu$SrednieSpalanie) + 0.5, label = paste0("n = ", N)), inherit.aes = FALSE) +
+  scale_fill_manual(values = MetBrewer::met.brewer("Archambault")) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(size = 11)
+  ) +
+  ggtitle("Zależność między średnim spalaniem a typem silnika") +
+  xlab("") +
+  ylab("Średnie spalanie")
+```
+
+### Audi
+
+```{r}
+Audi_bezNAwSpalaniu <- Audi %>%
+  filter(!is.na(SrednieSpalanieZuzycie))
+
+counts <- Audi_bezNAwSpalaniu %>%
+  group_by(TypSilnika) %>%
+  summarise(N = n())
+
+Audi_bezNAwSpalaniu$SrednieSpalanie <- Audi_bezNAwSpalaniu$SrednieSpalanieZuzycie  
+
+Audi_bezNAwSpalaniu$SrednieSpalanie[Audi_bezNAwSpalaniu$TypSilnika == "elektryczny"] <- 
+  Audi_bezNAwSpalaniu$SrednieSpalanieZuzycie[Audi_bezNAwSpalaniu$TypSilnika == "elektryczny"] / 8.9 * 1.69 
+
+# Plot z liczbą obserwacji
+ggplot(Audi_bezNAwSpalaniu, aes(x = TypSilnika, y = SrednieSpalanie, fill = TypSilnika)) +
+  geom_violin(width = 1.4) +
+  geom_boxplot(width = 0.1, color = "black", alpha = 0.2) +
+  geom_text(data = counts, aes(x = TypSilnika, y = max(Audi_bezNAwSpalaniu$SrednieSpalanie) + 0.5, label = paste0("n = ", N)), inherit.aes = FALSE) +
+  scale_fill_manual(values = MetBrewer::met.brewer("Archambault")) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(size = 11)
+  ) +
+  ggtitle("Zależność między średnim spalaniem a typem silnika") +
+  xlab("") +
+  ylab("Średnie spalanie")
+```
+
+### Opel
+
+```{r}
+Opel_bezNAwSpalaniu <- Opel %>%
+  filter(!is.na(SrednieSpalanieZuzycie))
+
+counts <- Opel_bezNAwSpalaniu %>%
+  group_by(TypSilnika) %>%
+  summarise(N = n())
+
+Opel_bezNAwSpalaniu$SrednieSpalanie <- Opel_bezNAwSpalaniu$SrednieSpalanieZuzycie  
+
+Opel_bezNAwSpalaniu$SrednieSpalanie[Opel_bezNAwSpalaniu$TypSilnika == "elektryczny"] <- 
+  Opel_bezNAwSpalaniu$SrednieSpalanieZuzycie[Opel_bezNAwSpalaniu$TypSilnika == "elektryczny"] / 8.9 * 1.69 
+
+# Plot z liczbą obserwacji
+ggplot(Opel_bezNAwSpalaniu, aes(x = TypSilnika, y = SrednieSpalanie, fill = TypSilnika)) +
+  geom_violin(width = 1.4) +
+  geom_boxplot(width = 0.1, color = "black", alpha = 0.2) +
+  geom_text(data = counts, aes(x = TypSilnika, y = max(Opel_bezNAwSpalaniu$SrednieSpalanie) + 0.5, label = paste0("n = ", N)), inherit.aes = FALSE) +
+  scale_fill_manual(values = MetBrewer::met.brewer("Archambault")) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(size = 11)
+  ) +
+  ggtitle("Zależność między średnim spalaniem a typem silnika") +
+  xlab("") +
+  ylab("Średnie spalanie")
+```
+:::
+
+#### Silnik beznynowy
+
+Mają mniejszą efektywność termodynamiczną niż na przykład silniki diesla. Diesle spalają paliwo w sposób bardziej efektywny, ponieważ pracują pod wyższym ciśnieniem, co pozwala na pełniejsze wykorzystanie energii zawartej w paliwie. Benzyna ma mniejszą gęstość energetyczną niż olej napędowy, co oznacza, że w jednostce objętości benzyna zawiera mniej energii. W rezultacie silniki benzynowe potrzebują więcej paliwa, aby wygenerować tę samą ilość energii.
+
+#### Silnik benzynowy z lpg
+
+Ten typ silnika fabrycznie mają marki Opel i Volkswagen. Silniki LPG zazwyczaj zużywają więcej gazu niż benzyny, ponieważ gaz ma niższą gęstość energetyczną. Oznacza to, że aby wygenerować taką samą ilość energii, silnik LPG potrzebuje większej objętości paliwa. Jednak w tym przypadku te spalanie jest bliskie miedianie spalania silników benzynowych. Na fakt ten wpływa pojemność silnika. Gdy chcemy wybrać silnik benzynowy z LPG mamy dość wąski wybór. Poniżej widzimy, że do wyboru mamy silniki o pojemnosciami 1.4, 1.2 i jedną obserwację z silnikiem 2.0 dla Volkswagena.
+
+```{r}
+BenzynaLPG <- WszystkieMarki %>%
+  filter(TypSilnika == "benzynowy z lpg") %>%
+  select(Marka, PojemnoscSilnika, SrednieSpalanieZuzycie)
+datatable(BenzynaLPG)
+```
+
+#### Silnik diesla
+
+Silniki diesla są bardziej efektywne pod względem spalania paliwa, ponieważ mają wyższą efektywność cieplną. Rzeczywiście w ogólnym rozrachunku średnie spalanie oleju napędowego jest mniejsze.
+
+#### Silnik elektryczny
+
+Pojazdy elektryczne mają znacznie mniejsze zużycie energii w porównaniu do zużycia energii pozyskanej z paliwa w pojazdach spalinowych. Przykładowo, aby uzyskać podobny zasięg co samochód benzynowy zużywający 6-8 litrów paliwa na 100 km, samochód elektryczny może zużywać tylko 15-20 kWh energii. Aby móc poprawnie porównać spalanie energii do innych typów paliwa trzeba by przeskalować średnie zużycie energii za pomocą poniższego wzoru:
+
+$\text{Zużycie paliwa w litrach/100 km} = \frac{\text{Zużycie energii w kWh/100 km}}{\text{Energetyczna zawartość paliwa (kWh/litr)}}$
+
+-   **Benzyna**: 1 litr benzyny zawiera około **8,9 kWh** energii.
+
+-   **Diesel**: 1 litr oleju napędowego zawiera około **9,7 kWh** energii.
+
+My wzieliśmy wartość energetyczną dla benzyny aby mieć możliwie największe średnie spalanie, gdyż i tak pozyskiwanie energii bez pośrednio z elektryczności bedzie bardziej wydajne.
+
+#### Silnik hybrydowy
+
+Układ napędowy pojazdu, który łączy dwa źródła energii: silnik spalinowy (benzynowy lub diesla) oraz silnik elektryczny. Pojazdy hybrydowe mają dwa źródła napędu, które mogą działać niezależnie lub wspólnie, w zależności od warunków jazdy. Dzięki temu połączeniu możemy się cieszyć znacznie niższym spalaniem. W naszych markach samochodów, mamy silniki hybrydowy wyłącznie połączone z silnikiem benzynowym. Niektóre marki samochodów posiadają również z silnikiem diesla, lecz jest to mniej efektywne gdyż używając silnika hybrydowego głównie chcemy zredukować emicje spalin, a spalanie oleju napędowego emituje dużo więcej zaniczyszczeń niż podczas spalania benzyny. Przykładem takiej marki jest BMW, które wprowadziło w 2023 takie rozwiązanie.
+
+#### Silnik hybrydowy plug-in
+
+Silnik hybrydowy plug-in jest bardziej zaawansowaną wersją silnika hybrydowego, który łączy dwa źródła napędu, ale z dodatkową funkcją ładowania akumulatora z zewnętrznego źródła energii (np. gniazdka elektrycznego). Pojazdy PHEV mają większą pojemność akumulatora niż tradycyjne pojazdy hybrydowe, co pozwala im na jazdę na krótkie odległości wyłącznie na energii elektrycznej. Tutaj nie przeliczamy energii na spalanie w porónaniu do silników spalinowych gdyż mowa tu jest o litrach benzyny.
+
+## Pojemność silnika
+
+```{r}
+# Przykładowe dane
+wykresliniowy <- WszystkieMarki %>%
+  group_by(Marka, PojemnoscSilnika) %>%
+  summarise(Ilość = n()) %>%
+  ungroup()
+
+# Tworzenie wykresu w ggplot2
+plot <- ggplot(wykresliniowy, aes(x = PojemnoscSilnika, y = Ilość, color = Marka)) +
+  geom_line(size = 1) +
+  labs(title = "Ilość samochodów dla pojemności silnika", x = "Pojemność Silnika", y = "Ilość") +
+  scale_color_manual(values = MetBrewer::met.brewer("Archambault")) +
+  theme_minimal()
+
+# Konwersja do interaktywnego wykresu plotly
+interactive_plot <- ggplotly(plot)
+
+# Wyświetlenie wykresu
+interactive_plot
+```
+
+### Volkswagen
+
+Przewagę stanowią modele z pojemnością **2.0L (**358obserwacjami), co wskazuje na jej dominację. Kolejne pojemności, takie jak **1.6L** (218 obserwacji) i **1.4L** (188 obserwacji), również cieszą się dużym zainteresowaniem, co może świadczyć o większym wyborze modeli w średnim segmencie. Volkswagen ma stosunkowo niewielką liczbę silników o większej pojemności, ponieważ tylko około 105 modeli ma pojemność powyżej **2.0L**. Największą pojemnością silnika w tej marce jest **6.0L**. Najmniejszy silnik Volkswagen to **0.8L**, lecz jest to zaledwie jedna obserwacja.
+
+### Toyota
+
+W przypadku Toyoty, dominującymi pojemnościami są **1.6L** oraz **2.0L**, które obejmują największą liczbę modeli. W porównaniu z innymi markami, Toyota nie ma tak szerokiej oferty modeli. W silnikach **1.3L** i **1.4L** widoczna jest pewna rozpiętość. Można zauważyć wąską oferte modeli o pojemności powyżej **2.0L**, lecz wyraźną dominacją wyróżnia sie ilość silników **3.0L**. Z kolei największy dostępny silnik to **5.7L**, co może świadczyć o mniejszym nacisku na silniki dużych pojemności w tej marce. Najmniejszy silnik Toyoty to **1.0L**, co stanowi typowy wybór wśród pojazdów miejskich.
+
+### Ford
+
+Ford oferuje szeroką gamę silników, gdzie **2.0L** to pojemność, która zdominowała ofertę tej marki, jednakże pojemność **1.6L** jest także liczną grupą. Oczywistym faktem jest że Ford posiada również bogaty wybór silników o pojemności powyżej **2.0L**, gdzie **7.5L** stanowi pojedynczy, ale rekordowy egzemplarz. Jest to silnik, który może być skierowany do wąskiego grona odbiorców. Warto zauważyć, że Ford oferuje również silniki o pojemności **1.0L**, które są stosunkowo liczne (108 modeli). W tej marce znajdziemy także średni segment z silnikami **1.3L**, **1.8L** oraz **1.4L**, co stanowi odpowiedź na rosnące zainteresowanie modelami średniej wielkości. Zatem Ford wyróżnia się spośród innych marek gammą wyboru pojemności.
+
+### Audi
+
+Audi w swojej ofercie także stawia na silniki o pojemności **2.0L**, które występują w największej liczbie modeli w porównaniu do pozostałych marek. Zdecydowaną przewagę ma także silnik **3.0L**, który w Audi jest liczniejszy niż w Toyocie. Analizując dalsze pojemności, Audi posiada również silniki **1.0L**, jednakże liczba ich występowania nie jest wysoka. Z kolei maksymalny silnik to **6.3L**. Warto zauważyć, że Audi ma większą koncentrację na pojemnościach średniej wielkości, zwłaszcza w segmencie **2.0L** i **3.0L** i dodatkowo **1.8L**.
+
+### Opel
+
+Marke Opel zdominował segment silników o pojemności **2.0L**, co jest bardzo widoczne w liczbach obserwacji. Podobnie jak inne marki, posiada także liczną grupę modeli z silnikami **1.6L**. Opel posiada niewielką liczbę modeli z silnikami między **2.0L** a **3.0L**. Pojemności powyżej **3.0L** to rzadkość, a maksymalny silnik to **5.7L**, co również wskazuje na mniejsze zainteresowanie pojazdami o bardzo dużych silnikach.
+
+### Podsumowując
+
+Każda z analizowanych marek oferuje różne podejścia do doboru silników, z wyraźnymi preferencjami do średnich i dużych pojemności w zależności od marki. Ford i Audi prezentują największą różnorodność, podczas gdy Toyota stawia na bardziej zrównoważoną ofertę, a Volkswagen i Opel dominują w segmencie średniej pojemności.
+
+## Braki danych o średnim spalaniu
+
+```{r}
+# Liczba obserwacji dla TypSilnika w obu tabelach
+silnik_ogol <- WszystkieMarki %>%
+  group_by(TypSilnika) %>%
+  summarise(Liczba = n())
+
+silnik_bezNA <- WszystkieMarki_bezNAwSpalaniu %>%
+  group_by(TypSilnika) %>%
+  summarise(Liczba_bezNA = n())
+
+# Tworzenie zbiorczej ramki danych
+plot_df <- merge(silnik_ogol, silnik_bezNA, by = "TypSilnika", all = TRUE)
+plot_df[is.na(plot_df)] <- 0  # Zamiana wartości NA na 0
+
+# Dodanie kolumny Procent do ramki danych
+plot_df <- plot_df %>%
+  mutate(Procent = ifelse(Liczba > 0, (Liczba_bezNA / Liczba) * 100, 0))
+
+plt <- ggplot(plot_df) +
+  # Siatka panelu dla procentów
+  geom_hline(
+    aes(yintercept = y), 
+    data.frame(y = seq(0, 100, by = 20)),  # Skala procentowa co 20%
+    color = "lightgrey"
+  ) + 
+  # Słupki dla procentowego udziału liczby z tabeli WszystkieMarki_bezNAwSpalaniu
+  geom_col(
+    aes(
+      x = reorder(str_wrap(TypSilnika, 10), Procent),
+      y = Procent,
+      fill = TypSilnika
+    ),
+    position = "dodge2",
+    show.legend = FALSE,
+    alpha = .9,
+    width = 0.8  # Zmniejszenie szerokości słupków
+  ) +
+  scale_fill_paletteer_d("MetBrewer::Archambault") +
+  # Kropki dla 100% na liniach przerywanych
+  geom_point(
+    aes(
+      x = reorder(str_wrap(TypSilnika, 10), Procent),
+      y = 100  # Kropki zawsze na poziomie 100%
+    ),
+    size = 3,
+    color = "gray"
+  ) +
+  # Linie przerywane dla procentowego zakresu
+  geom_segment(
+    aes(
+      x = reorder(str_wrap(TypSilnika, 10), Procent),
+      y = 0,
+      xend = reorder(str_wrap(TypSilnika, 10), Procent),
+      yend = 100
+    ),
+    linetype = "dashed",
+    color = "gray"
+  ) + 
+  # Etykiety z procentami nad słupkami
+  geom_text(
+    aes(
+      x = reorder(str_wrap(TypSilnika, 10), Procent),
+      y = Procent + 2,  # Umieszczenie etykiety tuż nad słupkiem
+      label = paste0(round(Procent, 1), "%")
+    ),
+    size = 3,
+    color = "black"
+  ) +
+  # Zmiana układu na biegunowy (radar chart)
+  coord_polar() +
+  # Zmiana kątów etykiet na poziome
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(hjust = 1, size = 9)  # Przesunięcie etykiet
+  ) +
+  labs(
+    title = "Procentowy udział braków danych o średnim spalaniu dla typów silników",
+    x = "Typ Silnika",
+    y = "Procentowy udział"
+  )
+
+plt
+```
+
+Największy odsetek braków występuje dla silników benzynowych – aż **23,8%** danych jest niepełnych, co może znacząco wpływać na wnioski dotyczące efektywności paliwowej w tej kategorii. Dla silników elektrycznych brakuje **11%** obserwacji, co jest istotne, biorąc pod uwagę rosnące zainteresowanie pojazdami elektrycznymi. Braki dla silników hybrydowych i hybrydowych plug-in wynoszą odpowiednio **9,1%** i **8,9%**, co sugeruje, że również w tych kategoriach potrzebne są dokładniejsze dane. Z kolei w przypadku diesla brak danych wynosi **8,5%**, co jest relatywnie niską wartością. Najlepiej udokumentowane są silniki benzynowe z LPG, gdzie brak danych wynosi **0%** – wszystkie obserwacje są kompletne. Próbując uzupełnić dane natchnęłam się na bardzo niską poprawnością uzupełnienia danych zważywszy na fakt że dane są pozyskane z deklaracji użytkowników co nie jest w zupełności wiarygodne.
+
+## Zależność między średnim spalaniem a mocą i pojemnoscią silnika
+
+Analizując dominujące pojemności silników wybranych marek, przeprowadzimy badanie średniego zużycia paliwa w zależności od pojemności i mocy silnika, z uwzględnieniem podziału na marki i typy silników. Wartości dotyczące silników elektrycznych zostały pominięte, ponieważ nie mają one pojemności w litrach. Należy również zauważyć, że wyniki analizy mogą zawierać pewien błąd, gdyż dane pochodzą z deklaracji użytkowników.
+
+```{r}
+WszystkieMarki_bezNAwSpalaniu$SrednieSpalanie <- WszystkieMarki_bezNAwSpalaniu$SrednieSpalanieZuzycie  
+
+WszystkieMarki_bezNAwSpalaniu$SrednieSpalanie[WszystkieMarki_bezNAwSpalaniu$TypSilnika == "elektryczny"] <- 
+  WszystkieMarki_bezNAwSpalaniu$SrednieSpalanieZuzycie[WszystkieMarki_bezNAwSpalaniu$TypSilnika == "elektryczny"] / 8.9 * 1.69
+
+ui <- fluidPage(
+  titlePanel("Średnie spalanie dla różnych pojemności silnika"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      sliderInput("zakres_pojemnosci", 
+                  "Zakres pojemności silnika (w litrach):", 
+                  min = min(WszystkieMarki_bezNAwSpalaniu$PojemnoscSilnika, na.rm = TRUE), 
+                  max = max(WszystkieMarki_bezNAwSpalaniu$PojemnoscSilnika, na.rm = TRUE), 
+                  value = range(WszystkieMarki_bezNAwSpalaniu$PojemnoscSilnika, na.rm = TRUE), 
+                  step = 0.1)
+    ),
+    mainPanel(
+      plotlyOutput("wykres")
+    )
+  )
+)
+
+server <- function(input, output) {
+  
+  # Funkcja do usuwania wartości odstających z danych
+  filter_outliers <- function(data, x_col, y_col, coef = 1.5) {
+    x <- data[[x_col]]
+    y <- data[[y_col]]
+    
+    q1 <- quantile(y, 0.25, na.rm = TRUE)
+    q3 <- quantile(y, 0.75, na.rm = TRUE)
+    iqr <- q3 - q1
+    
+    # Tylko dane w zakresie 1.5 * IQR są zachowywane
+    filtered_data <- data[y >= (q1 - coef * iqr) & y <= (q3 + coef * iqr), ]
+    return(filtered_data)
+  }
+  
+  output$wykres <- renderPlotly({
+    filtr <- WszystkieMarki_bezNAwSpalaniu %>% 
+      filter(PojemnoscSilnika >= input$zakres_pojemnosci[1] & 
+             PojemnoscSilnika <= input$zakres_pojemnosci[2])
+    
+    # Filtracja danych, aby usunąć wartości odstające
+    filtr_bez_outliers <- filter_outliers(filtr, "MocSilnika", "SrednieSpalanie")
+    
+    wykres <- ggplot(filtr_bez_outliers, aes(x = MocSilnika, y = SrednieSpalanie, color = TypSilnika)) +
+      geom_point(size = 1) +
+      geom_smooth(method = "lm", formula = y ~ x, aes(color = TypSilnika), se = FALSE, size = 0.5) +  
+      scale_color_manual(values = MetBrewer::met.brewer("Archambault")) + 
+      labs(title = 'Średnie spalanie względem mocy silnika', 
+           x = 'Moc Silnika', 
+           y = 'Średnie Spalanie') +
+      facet_wrap(~Marka) +
+      theme_minimal()
+    
+    ggplotly(wykres)
+  })
+}
+
+#shinyApp(ui, server)
+```
+
+<a href="http://127.0.0.1:5038" class="button" target="_blank">Sprawdź zależności</a>
+
+### Volkswagen
+
+#### Pojemność 1.6L
+
+-   **Benzynowy**: Spalanie maleje wraz ze wzrostem mocy, która nie przekracza 125 KM.
+
+-   **Diesel**: Drastyczny spadek zużycia paliwa, mimo że moc silnika osiąga maksymalnie 140 KM.
+
+#### Pojemność 2.0L
+
+-   **Benzynowy**: Średnie spalanie pozostaje prawie stałe, niezależnie od mocy.
+
+-   **Benzynowy z LPG**: Obserwacja o wyjątkowo niskim spalaniu.
+
+-   **Diesel**: Przy większej mocy spalanie rośnie bardzo wyraźnie.
+
+#### Poniżej 2.0L
+
+-   **Benzynowy**: Większość silników ma moc do 150 KM, a dla całej grupy widać tendencję wzrostu spalania.
+
+-   **Benzynowy z LPG**: Tylko dwie obserwacje (108KM i 150KM) wskazujące na rosnące spalanie.
+
+-   **Diesel**: Łagodny wzrost spalania.
+
+-   **Hybrydowy**: Spadek zużycia paliwa.
+
+-   **Hybrydowy plug-in**: Spalanie stabilne, skupione wokół podobnych wartości.
+
+#### Powyżej 2.0L
+
+-   **Benzynowy**: Spalanie szybko rośnie wraz z mocą.
+
+-   **Diesel**: Bardzo gwałtowny wzrost spalania.
+
+-   **Hybrydowy**: Minimalny wzrost spalania.
+
+#### Wszystkie pojemności
+
+Dla każdego typu silnika tendecja wzrostowa.
+
+#### Wnioski
+
+**Diesle są bardziej ekonomiczne przy niższych pojemnościach**, ale spalanie znacząco rośnie dla większych jednostek napędowych. **Benzyna z LPG** charakteryzuje się rozproszonymi danymi – często pojedyncze przypadki utrudniają wyciąganie pełnych wniosków. **Hybrydy** i **hybrydy plug-in** mają widoczny spadek lub stabilne spalanie bez większego wpływu mocy na zużycie paliwa. Pojemności poniżej 2.0L cechuje większa zmienność spalania, szczególnie dla silników benzynowych.
+
+### Toyota
+
+#### Pojemność 1.6L
+
+-   **Benzynowy**: Średnie spalanie maleje, ale dla najwyższej mocy jest wyraźnie większe niż w skupionej grupie o mniejszej mocy.
+
+-   **Diesel**: Dwie obserwacje przy 112 KM różnią się średnim spalaniem o 1.3 L.
+
+#### Pojemność 2.0L
+
+-   **Benzynowy**: Spalanie pozostaje praktycznie stałe w przedziale mocy do 200 KM.
+
+-   **Diesel**: Widoczny spadek spalania, choć zakres mocy jest niewielki.
+
+-   **Hybrydowy**: Trzy wartości (184 KM i 197 KM) dość blisko siebie pod względem spalania.
+
+-   **Hybrydowy plug-in**: Dwie obserwacje przy 223 KM o podobnym spalaniu, które jest znacznie niższe niż dla hybryd, pomimo większej mocy.
+
+#### Poniżej 2.0L
+
+-   **Benzynowy**: Spalanie rośnie; większość obserwacji dotyczy niskiej mocy i średniego spalania w okolicach 7 L/100 km.
+
+-   **Diesel**: Spalanie maleje w bardzo wąskim zakresie mocy (około 100 KM).
+
+-   **Hybrydowy**: Spalanie wzrasta wraz z mocą – dane dotyczą jednostek o mocy do 200 KM.
+
+#### Powyżej 2.0L
+
+-   **Benzynowy**: Wyraźny wzrost spalania wraz ze wzrostem mocy.
+
+-   **Diesel**: Zaskakujący spadek spalania przy większej mocy.
+
+#### Wszystkie pojemności
+
+Dla każdego typu silnika tendecja wzrostowa.
+
+#### Wnioski
+
+**Diesle** często zachowują większą ekonomiczność nawet przy wyższej mocy, w przeciwieństwie do trendów zaobserwowanych u Volkswagena. **Hybrydy plug-in** są bardziej efektywne paliwowo niż klasyczne hybrydy, nawet przy większej mocy. **Benzynowe jednostki o większej pojemności** (powyżej 2.0L) zużywają znacznie więcej paliwa, niezależnie od marki. Dla mniejszych pojemności dominują jednostki benzynowe, w których mocniejszy silnik zwykle wiąże się z wyższym spalaniem.
+
+### Ford
+
+#### **Pojemność 1.6L**
+
+-   **Benzynowy:** Średnie spalanie maleje w miarę wzrostu mocy. Najwięcej danych dotyczy wyższego spalania w granicach 7L przy mocy do 125 KM.
+
+-   **Diesel:** Spalanie delikatnie spada do 115 KM.
+
+#### **Pojemność 2.0L**
+
+-   **Benzynowy:** Spalanie spada.
+
+-   **Diesel:** Wartość spalania stabilizuje się na poziomie średnio 5.5L.
+
+-   **Hybrydowy:** Obserwacje wskazują na spalanie w przedziale od 4.2L do 6.1L przy mocy 187 KM.
+
+#### **Pojemności poniżej 2.0L**
+
+-   **Benzynowy:** Spalanie pozostaje stabilne.
+
+-   **Diesel:** Zauważalny jest lekki wzrost zużycia paliwa.
+
+-   **Hybrydowy:** Spalanie jest skoncentrowane w wąskim przedziale.
+
+#### **Pojemności powyżej 2.0L**
+
+-   **Benzynowy:** Wzrost spalania jest widoczny.
+
+-   **Diesel:** Spalanie spada, ale moc nie przekracza 200 KM.
+
+-   **Hybrydowy:** Spalanie pozostaje skoncentrowane wokół mocy 185 KM.
+
+-   **Hybrydowy plug-in:** Jedna obserwacja pokazuje wyższe spalanie w porównaniu do tradycyjnego hybrydowego.
+
+#### **Wszystkie pojemności**
+
+Dla silników benzynowych i diesla widać tendencję wzrostową w spalaniu, podczas gdy dla hybryd spalanie pozostaje stabilne, z wyjątkiem jednej wartości odstającej.
+
+#### **Wnioski**
+
+Zależność między pojemnością silnika a średnim spalaniem wskazuje na tendencję wzrostu spalania wraz z większą pojemnością, szczególnie w przypadku **silników benzynowych**. **Hybrydowe** rozwiązania charakteryzują się niższym średnim zużyciem paliwa, zwłaszcza przy mocy do 200 KM. Spalanie w **silnikach diesla** stabilizuje się przy pojemności 2.0L i wzrasta w przypadku większych pojemności, pozostając jednak konkurencyjnym w porównaniu do innych napędów.
+
+### Audi
+
+#### **Pojemność 1.6L**
+
+-   **Benzynowy:** Spalanie spada, jednak maksymalna moc jest bardzo mała, wynosząca 115 KM.
+
+-   **Diesel:** Spalanie znacząco spada, przy bardzo małej maksymalnej mocy 116 KM.
+
+#### **Pojemność 2.0L**
+
+-   **Benzynowy:** Spalanie spada.
+
+-   **Diesel:** Spalanie spada w sposób znaczący.
+
+-   **Hybrydowy:** Spalanie pozostaje dość stabilne, utrzymując się w średnim przedziale.
+
+-   **Hybrydowy plug-in:** Spalanie stabilne, ale rośnie wraz z mocą.
+
+#### **Pojemności poniżej 2.0L**
+
+-   **Benzynowy:** Spalanie spada, wartości są skoncentrowane w zakresie mniejszych mocy, zgodnie z pozytywną linią regresji.
+
+-   **Diesel:** Zauważalny jest lekki wzrost zużycia paliwa.
+
+-   **Hybrydowy:** Dwie obserwacje, które różnią się nieznacznie wraz ze wzrostem mocy.
+
+-   **Hybrydowy plug-in:** Spalanie skoncentrowane w wąskim przedziale mocy.
+
+#### **Pojemności powyżej 2.0L**
+
+-   **Benzynowy:** Wzrost spalania staje się widoczny.
+
+-   **Diesel:** Spalanie wzrasta, ale tylko nieznacznie.
+
+-   **Hybrydowy:** Spalanie pozostaje stabilne wokół mocy 185 KM.
+
+-   **Hybrydowy plug-in:** Spalanie pozostaje na stałym poziomie.
+
+#### **Wszystkie pojemności**
+
+Wzrost spalania jest stosunkowo stały, z wyjątkiem silników hybrydowych, gdzie obserwuje się wyraźny spadek.
+
+#### **Wnioski**
+
+W **silnikach benzynowych** spalanie spada przy mniejszych pojemnościach, a wzrasta w przypadku większych pojemności, z wyraźnym wzrostem dla pojemności powyżej 2.0L. **Silniki diesla** pokazują spadek spalania przy pojemnościach 2.0L i mniejszych, ale przy większych pojemnościach spalanie wzrasta tylko nieznacznie. **Hybrydy** charakteryzują się dość stabilnym spalaniem w całym zakresie mocy, z wyjątkiem większych pojemności, gdzie spalanie pozostaje skoncentrowane wokół mocy 185 KM. **Hybrydowe plug-in** mają stabilne spalanie, ale zauważalny wzrost w jednostkach o wyższej mocy.
+
+### Opel
+
+#### **Pojemność 1.6L**
+
+-   **Benzynowy:** Lekki spadek spalania.
+
+-   **Diesel:** Lekki spadek spalania.
+
+-   **Hybrydowy plug-in:** Lekki wzrost spalania, jednak moc jest znacznie wyższa.
+
+#### **Pojemność 2.0L**
+
+-   **Benzynowy:** Spalanie utrzymuje się na stałym poziomie.
+
+-   **Diesel:** Spalanie pozostaje na stałym poziomie.
+
+#### **Pojemności poniżej 2.0L**
+
+-   **Benzynowy:** Spalanie pozostaje stabilne.
+
+-   **Diesel:** Zauważalny jest lekki wzrost zużycia paliwa.
+
+-   **Hybrydowy:** Dwie obserwacje różnią się nieznacznie wraz ze wzrostem mocy.
+
+-   **Hybrydowy plug-in:** Spalanie jest skoncentrowane w wąskim przedziale mocy.
+
+#### **Pojemności powyżej 2.0L**
+
+-   **Benzynowy:** Spalanie znacznie wzrasta.
+
+-   **Benzynowy z LPG:** Spalanie wzrasta, ale nie osiąga wysokich wartości przy dużych mocach (do 140 KM).
+
+-   **Diesel:** Spalanie wzrasta nieznacznie.
+
+-   **Hybrydowy:** Spalanie lekko wzrasta wraz ze wzrostem mocy, pomijając wartości odstające.
+
+-   **Hybrydowy plug-in:** Spalanie lekko maleje przy wzroście mocy, opierając się na dwóch obserwacjach.
+
+#### **Wszystkie pojemności**
+
+Zauważalny ogólny wzrost spalania, szczególnie dla silników benzynowych, gdzie tendencja wzrostu jest dość wyraźna.
+
+#### **Wnioski**
+
+W przypadku **silników benzynowych** spalanie rośnie znacząco, szczególnie przy wyższych pojemnościach. **Silniki diesla** wykazują niewielki wzrost spalania przy większych pojemnościach. **Hybrydy** pokazują stosunkowo stabilne zużycie paliwa, a ich spalanie rośnie w miarę wzrostu mocy, ale nieznacznie. **Hybrydowe plug-in** pokazują różnorodne tendencje, z lekkim wzrostem, szczególnie przy wyższych mocach.
+
+### Rekomendacje
+
+**Dla osób szukających ekonomicznych silników** warto zainteresować się Toyotami i Fordami. Większe moce silnika w ofercie jedynie mają Toyoty.
+
+**Hybrydy plug-in** są dobrym rozwiązaniem dla osób, które chcą uzyskać stabilne spalanie. **Audi** wyróżnia się w tej kategorii. **Volkswagen** i **Opel** również oferują atrakcyjne opcje chodź jest ich mniej.
+
+**Benzynowe silniki** powinny być rozważane przez osoby preferujące większą moc, jednak należy liczyć się z wyraźnym wzrostem spalania przy większych pojemnościach. **Ford** i **Audi** oferują silniki o stabilniejszym spalaniu przy średnich pojemnościach.
+
+**Dla osób preferujących niskie spalanie przy dużych pojemnościach**, **Toyota** oferuje wyjątkową efektywność., a **Opel** i **Ford** są mniej efektywne, zwłaszcza przy dużych jednostkach napędowych.
+
+## Podział na klastry
+
+```{r}
+# Wybieramy kolumny, które będą użyteczne do analizy
+DataFrame_Clustering <- WszystkieMarki_bezNAwSpalaniu %>%
+  select( SrednieSpalanie, MocSilnika)
+
+# Skalowanie danych (aby zmienne o różnych jednostkach były porównywalne)
+DataFrame_Clustering <- scale(DataFrame_Clustering)
+```
+
+```{r}
+# Ustalanie optymalnej liczby klastrów
+clusters_wss <- fviz_nbclust(DataFrame_Clustering, kmeans, method = "wss") 
+clusters_silhouette <- fviz_nbclust(DataFrame_Clustering, kmeans, method = "silhouette")
+
+# Wyświetlanie wykresów
+clusters_wss
+```
+
+```{r}
+#Szukanie optymalnego clustra
+optimal_cluster <- kmeans(DataFrame_Clustering, centers = 8, iter.max =25)
+
+#Wizualizacja
+fviz_cluster(optimal_cluster, data = DataFrame_Clustering, labelsize = 0)
+```
+
+Na podstawie tej wizualizacji postanowiłam użyć 8 klastrów zależnych od średniego spalania i mocy silnika.
+
+```{r}
+# Dane przygotowane do analizy klastrów
+data_dendro <- WszystkieMarki_bezNAwSpalaniu %>% 
+  group_by(TypSilnika, Marka) %>%
+  summarise(
+    SrednieSpalanie = mean(SrednieSpalanie, na.rm = TRUE), 
+    MocSilnika = mean(MocSilnika, na.rm = TRUE)
+  ) %>% 
+  ungroup()
+
+# Obliczenie odległości i hierarchiczne grupowanie
+dist_data <- dist(data_dendro[, c("SrednieSpalanie", "MocSilnika")])
+hc <- hclust(dist_data)
+dend <- as.dendrogram(hc)
+
+# Dodanie etykiet: marka i typ silnika
+labels(dend) <- paste(data_dendro$Marka, data_dendro$TypSilnika, sep = "_")
+
+# Dopasowanie kolorów klastrów do nowego podziału
+cluster_colors <- colorRampPalette(c("#E61A33FF", "#FF8000FF", "#FDC067FF",  "#F9D14AFF", "#FFED4DFF", "#B2FF8CFF", "#33FF00FF", "#03A62CFF" ))
+dend <- dend %>% 
+  set("branches_k_color", value = cluster_colors, k = 8) %>%
+  set("labels_col", value = cluster_colors, k = 8)  # Kolory etykiet dla lepszej czytelności
+
+# Wyświetlanie dendrogramu
+par(mar = c(12, 3, 1, 1))  
+plot(dend, yaxt = "n", main = "Dendrogram dla klastrów")
+```
+
+Warto też zwróćić uwage na to ile mamy obserwacji dla poszczególnych i typów silnika.
+
+```{r}
+count_types_per_brand <- WszystkieMarki_bezNAwSpalaniu %>%
+  group_by(Marka, TypSilnika) %>%
+  summarise(LiczbaObserwacji = n())%>%
+  arrange(desc(TypSilnika)) 
+
+datatable(count_types_per_brand) 
+```
+
+### Wnioski
+
+1.  **Klasyfikacja pojazdów pod kątem efektywności paliwowej i osiągów**:\
+    Podział klastrów wskazuje na wyraźną różnicę w **wydajności paliwowej** oraz **mocy silnika** między typami napędów:
+
+    -   **Samochody benzynowe i dieslowe** (czerwone, pomarańczowe i jasno pomarańćzowe klastry) charakteryzują się wyższym średnim zużyciem paliwa w stosunku do mocy silnika niż samochody hybrydowe i elektryczne.
+
+    -   **Hybrydy i hybrydy plug-in** mają wyraźnie niższe spalanie przy zachowaniu stosunkowo dużej mocy, co plasuje je w oddzielnych, bardziej „zielonych” klastrach.
+
+2.  **Silniki o niższej mocy, ale większym zużyciu paliwa**:
+
+    -   W pierwszych klastrach (czerwony, pomarańczowy) znajdują się głównie pojazdy z napędem **benzynowym** o **niższej mocy** i **wyższym spalaniu**, co jest typowe dla starszych technologii spalinowych lub mniej ekonomicznych modeli.
+
+3.  **Efektywność technologii hybrydowej i elektrycznej**:
+
+    -   Klaster zielony zawiera pojazdy hybrydowe i elektryczne, które oferują stosunkowo dużą moc przy bardzo niskim lub zerowym zużyciu paliwa. Hybrydy plug-in również korzystają z niskiego zużycia energii dzięki możliwości ładowania.
+
+4.  **Podział marek według strategii efektywności paliwowej**:
+
+    -   **Toyota i Volkswagen** występują w wielu klastrach, co pokazuje różnorodność ich oferty: od tradycyjnych pojazdów spalinowych do zaawansowanych technologii hybrydowych i elektrycznych.
+
+    -   W klastrach można dostrzec różnice w średnim spalaniu między różnymi generacjami samochodów tych samych marek.
+
+5.  **Silniki diesla w środku spektrum**:
+
+    -   Samochody dieslowe znajdują się głównie w **żółtych i jasnopomarańczowych klastrach**, co sugeruje, że oferują wyższe moce silnika przy umiarkowanym zużyciu paliwa. W porównaniu z benzynowymi, diesle wypadają bardziej efektywnie w stosunku mocy do zużycia.
+
+-   Hybrydy i hybrydy plug-in wydają się najbardziej efektywnymi pod względem paliwowym pojazdami o dużej mocy.
+
+-   Samochody z dużą mocą silnika i wysokim spalaniem są wyraźnie mniej efektywne i tworzą własny segment w klasie benzynowej.
+
+-   Przejście od czerwieni do zieleni odpowiada wzrostowi **wydajności energetycznej** – od najmniej ekonomicznych do najbardziej oszczędnych pod względem spalania.
+
+### Rekomendacje
+
+**Porównanie kosztów eksploatacji** różnych klastrów pomoże zidentyfikować, które grupy są najbardziej opłacalne dla użytkownika.
+
+Dalsza analiza wpływu pojemności silnika na pozycjonowanie w klastrach może dostarczyć dodatkowych informacji o relacji między mocą a efektywnością paliwową.
+
+Warto dodać informacje o emisjach spalin, aby dokładniej scharakteryzować ekologiczność poszczególnych klastrów.
+
+## Rodzaj skrzyni a rodzaj napedu
+
+```{r}
+heatmap_data_df <- as.data.frame(table(WszystkieMarki$RodzajNapedu, WszystkieMarki$RodzajSkrzyni))
+colnames(heatmap_data_df) <- c("RodzajNapedu", "RodzajSkrzyni", "Count")
+
+heatmap_data_df$Count <- ave(heatmap_data_df$Count, heatmap_data_df$RodzajSkrzyni, FUN = function(x) rescale(x))
+
+ggplot(heatmap_data_df, aes(x = RodzajSkrzyni, y = RodzajNapedu, fill = Count)) +
+  geom_tile() +
+  scale_fill_gradient(low = "#88A0DCFF", high = "#381A61FF") +  # Kolorowanie
+  scale_y_discrete(position = "right") +  # Ustawienie osi Y po prawej stronie
+  theme_minimal() +
+  theme(
+    axis.title.x = element_blank(),  # Usunięcie tytułu osi X
+    axis.title.y = element_blank()
+  ) +
+  labs(title = "Heatmapa dla rodzaju napedu i skrzyni") +
+  guides(fill = guide_colorbar(title = "Skala"))  # Zmiana tytułu legendy
+```
+
+Wśród danych najczęściej spotykaną kombinacją jest **manualna skrzynia biegów** w połączeniu z **napędem na przednią oś**. To zestawienie pojazdów dominuje w zestawieniu, co może sugerować, że taki typ napędu w połączeniu z manualną skrzynią biegów jest najpopularniejszym wyborem w analizowanych danych. Jest to również bardzo popularna kombinacja w pojazdach z napędem **4x4**.
+
+**Automatyczne skrzynie biegów** są zdecydowanie częściej spotykane w pojazdach z napędem **4x4** oraz napędem **na przednią oś**, co wskazuje na preferencję dla tego typu skrzyni w przypadku pojazdów z większą mocą napędu. Automatyczne skrzynie biegów pojawiają się również w połączeniu z napędem **na tylną oś**, choć w dużo mniejszych ilościach. Kombinacje z **bezstopniową skrzynią biegów** (CVT) oraz **zautomatyzowaną skrzynią biegów** występują znacznie rzadziej, zwłaszcza w połączeniu z napędem **na tylną oś**. Te kombinacje stanowią marginalny procent w zbiorze danych, co może świadczyć o ich mniejszej popularności.
+
+W kolumnach `RodzajSkrzyni` i `RodzajNapedu` znajdują się również wiersze z brakami danych, dla części pojazdów brakuje informacji na temat typu napędu lub skrzyni biegów. Nie jest ich na tyle dużo aby w znaczny sposób zaburzały nam wynik. Uzupełnienie ich mogło by się wiązać z podaniem fałszywych informacji na temat danego modelu. Braki tych danych mogą świadczyć o mniejszej popularności danych modeli aut.
+
+```{r}
+liczba_wystapien <- WszystkieMarki %>%
+  group_by(Marka, RodzajNapedu, RodzajSkrzyni) %>%
+  summarise(Liczba = n()) %>%
+  ungroup()
+
+datatable(liczba_wystapien)
+```
+
+Warto też spojrzeć jakie kombinacje rodzajó napędu i skrzyni występują dla danej marki.
+
+# Zatem którą marke wybrać?
+
+Niestety, nie ma jednej uniwersalnej marki samochodu, która oferowałaby modele odpowiednie dla każdej osoby, niezależnie od jej preferencji. Niemniej jednak, można wyróżnić pewne cechy dla poszczególnych marek:
+
+**Volkswagen** oferuje samochody z silnikiem benzynowym o średniej pojemności, napędem na przednią oś oraz średnią mocą, ale ma również szeroką ofertę samochodów z silnikami diesla.
+
+-   **Volkswagen Golf 1.5 TSI** silnik benzynowy, moc 150 KM, Hatchback lub Variant (kombi).
+
+-   **Volkswagen Passat 2.0 TDI** silnik diesel, moc od 110 do 240 KM, w różnych wariantach nadwozia.
+
+**Toyota** posiada w swojej ofercie pojazdy benzynowe o małej pojemności silnika, napędzie na przednią oś i małej mocy.
+
+-   **Toyota Corolla 1.6** silnik benzynowy, moc od 73 do 165 KM, w różnych wariantach nadwozia.
+
+-   **Toyota Avensis 2.0** silnik benzynowy, moc od 128 do 152 KM, w różnych wariantach nadwozia.
+
+**Ford** proponuje samochody benzynowe jak i diesle z większymi silnikami, wyższą mocą i napędem na przednią oś, jednakże dla typowego użytkownika poruszającego się po mieście też coś się znajdzie.
+
+-   **Ford Focus 1.6 EcoBoost** silnik benzynowy, moc od 150 do 182 KM, Hatchback, Sedan lub Kombi.
+
+-   **Ford** **Mondeo 2.0 TDCi** silnik diesla, moc od 115 do 210 KM, w różnych wariantach nadwozia.
+
+-   **Ford Mustang 5.0 GT** silnik benzynowy, moc 418 KM, Coupe.
+
+**Audi** to marka luksusowa, która oferuje szeroką gamę aut benzynowych z większymi silnikami i wyższymi mocami, w tym także samochody 4x4. Audi oferuje również pojazdy sportowe.
+
+-   **Audi A4 2.0 TFSI** silnik benzynowy, moc od 150 do 265 KM, w różnych wariantach nadwozia, z możliwością wyboru napędu 4x4.
+
+-   **Audi A5 F5 S5 3.0 TDI** silnik diesla, moc 347 KM, Coupe, z napędem 4x4.
+
+-   **Audi A8 D2 4.2 V8** silnik benzynowy, moc 340 lub 360 KM, Sedan, z napędem 4x4.
+
+**Opel** to marka oferująca samochody benzynowe z średnimi silnikami i mniejszą mocą, z napędem na przednią oś.
+
+-   **Opel Astra H 1.6 Ecotec** silnik benzynowy, moc 115 KM, w różnych wariantach nadwozia.
+
+-   **Opel Insignia 2.0 CDTi BiTurbo** silnik diesla, moc od 190 do 210 KM, w różnych wariantach nadwozia, z możliwością wyboru napędu 4x4.
+
+Jeśli interesuje Cię oszczędna hybryda, warto zapoznać się z ofertą **Toyoty** i **Forda**.
+
+-   **Toyota Yaris 1.5 Hybrid** silnik hybrydowy, moc 116 KM, Hatchback lub Cross (SUV).
+
+-   **Toyota Corolla 2.0 Hybrid** silnik hybrydowy, moc około 190 KM, Hatchback lub Kombi.
+
+-   **Ford Mondeo 2.0 Hybrid** silnik hybrydowy, moc 187 KM, Sedan lub Kombi.
+
+-   **Ford Focus 1.0 Hybrid** silnik hybrydowy, moc 125 lub 155 KM, Hatchback lub Kombi.
+
+Jeżeli natomiast szukasz samochodu elektrycznego, warto rozważyć propozycje **Audi**.
+
+-   **Audi Q5 e-tron** silnik elektryczny, moc 170, 204 lub 286 KM, SUV, z napędem na tylną oś.
+
+Jeśli chcesz połączyć silnik benzynowy z możliwością ładowania elektrycznego, aby osiągnąć jak najniższe spalanie, warto przyjrzeć się samochodom **Audi** i **Volkswagena**.
+
+-   **Audi A8 D5 3.0** silnik hybrydowy plug-in, 449 lub 462 KM, Sedan, z napędem 4x4.
+
+-   **Volkswagen Passat B8 GTE 1.4** silnik hybrydowy plug-in, moc 218 KM, Sedan.
